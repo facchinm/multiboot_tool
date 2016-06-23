@@ -1,10 +1,10 @@
-TARGETS=twiboot mpmboot funkboot
+TARGETS=twiboot mpmboot funkboot twiboot_serial
 TARGET_DIR=~/bin
 BUILD_DIR = build
 
 CFLAGS= -pipe -O2 -Wall -Wno-unused-result
 CFLAGS+= -MMD -MP -MF $(BUILD_DIR)/$(*D)/$(*F).d
-LDFLAGS=
+LDFLAGS=-lserialport
 
 # ------
 

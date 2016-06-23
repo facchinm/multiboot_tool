@@ -28,6 +28,7 @@ struct multiboot_ops {
 };
 
 extern struct multiboot_ops twi_ops;
+extern struct multiboot_ops twi_serial_ops;
 extern struct multiboot_ops mpm_ops;
 extern struct multiboot_ops funk_ops;
 

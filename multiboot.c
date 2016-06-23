@@ -41,6 +41,7 @@ struct prog_mode {
 static struct prog_mode prog_modes[] =
 {
     { "twiboot", &twi_ops },
+    { "twiboot_serial", &twi_serial_ops },
     { "mpmboot", &mpm_ops },
     { "funkboot", &funk_ops },
 };
