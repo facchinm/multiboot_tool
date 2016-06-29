@@ -45,13 +45,13 @@
 #define WRITE_BLOCK_SIZE	 16	/* bytes in one eeprom write request */
 
 /* SLA+R */
-#define CMD_WAIT		0x00
+#define CMD_WAIT		    0x00
 #define CMD_READ_VERSION	0x01
-#define CMD_READ_MEMORY		0x02
+#define CMD_READ_MEMORY     0x02
 
 /* SLA+W */
-#define CMD_SWITCH_APPLICATION	CMD_READ_VERSION
-#define CMD_WRITE_MEMORY	CMD_READ_MEMORY
+#define CMD_SWITCH_APPLICATION	   CMD_READ_VERSION
+#define CMD_WRITE_MEMORY	       CMD_READ_MEMORY
 
 /* CMD_SWITCH_APPLICATION parameter */
 #define BOOTTYPE_BOOTLOADER	0x00				/* only in APP */
@@ -62,6 +62,8 @@
 #define MEMTYPE_FLASH		0x01
 #define MEMTYPE_EEPROM		0x02
 #define MEMTYPE_PARAMETERS	0x03				/* only in APP */
+
+#define END_OF_MESSAGE      0x77
 
 struct multiboot_ops twi_serial_ops;
 
@@ -85,21 +87,24 @@ static struct option twi_optargs[] = {
 
 static int twi_serial_switch_application(struct twi_privdata *twi, uint8_t application)
 {
-    uint8_t cmd[] = { CMD_SWITCH_APPLICATION, application };
+    uint8_t cmd[] = { CMD_SWITCH_APPLICATION, application, END_OF_MESSAGE, END_OF_MESSAGE };
 
-    return (sp_nonblocking_write(twi->port, cmd, sizeof(cmd)) != sizeof(cmd));
+    return (sp_blocking_write(twi->port, cmd, sizeof(cmd), 1000) != sizeof(cmd));
 }
 
 static int twi_serial_read_version(struct twi_privdata *twi, char *version, int length)
 {
-    uint8_t cmd[] = { CMD_READ_VERSION };
+    uint8_t cmd[] = { CMD_READ_VERSION | 0x80, length, END_OF_MESSAGE, END_OF_MESSAGE };
 
-    if (sp_nonblocking_write(twi->port, cmd, sizeof(cmd)) != sizeof(cmd))
+    if (sp_blocking_write(twi->port, cmd, sizeof(cmd), 1000) != sizeof(cmd)) {
         return -1;
+    }
+    usleep(1000);
 
     memset(version, 0, length);
-    if (sp_nonblocking_read(twi->port, version, length) != length)
+    if (sp_blocking_read(twi->port, version, length, 1000) != length) {
         return -1;
+    }
 
     int i;
     for (i = 0; i < length; i++)
@@ -110,11 +115,13 @@ static int twi_serial_read_version(struct twi_privdata *twi, char *version, int 
 
 static int twi_serial_read_memory(struct twi_privdata *twi, uint8_t *buffer, uint8_t size, uint8_t memtype, uint16_t address)
 {
-    uint8_t cmd[] = { CMD_READ_MEMORY, memtype, (address >> 8) & 0xFF, (address & 0xFF) };
-    if (sp_nonblocking_write(twi->port, cmd, sizeof(cmd)) != sizeof(cmd))
+    uint8_t cmd[] = { CMD_READ_MEMORY | 0x80, memtype, (address >> 8) & 0xFF, (address & 0xFF), size, END_OF_MESSAGE, END_OF_MESSAGE };
+    if (sp_blocking_write(twi->port, cmd, sizeof(cmd), 1000) != sizeof(cmd))
         return -1;
 
-    return (sp_nonblocking_read(twi->port, buffer, size) != size);
+    usleep(5000);
+
+    return (sp_blocking_read(twi->port, buffer, size, 1000) != size);
 }
 
 static int twi_serial_write_memory(struct twi_privdata *twi, uint8_t *buffer, uint8_t size, uint8_t memtype, uint16_t address)
@@ -125,10 +132,10 @@ static int twi_serial_write_memory(struct twi_privdata *twi, uint8_t *buffer, ui
             fprintf(stderr, "twi_write_memory(): address 0x%04x not aligned to pagesize 0x%02x\n", address, twi->pagesize);
             return -1;
         }
-        bufsize = 4 + twi->pagesize;
+        bufsize = 6 + twi->pagesize;
 
     } else {
-        bufsize = 4 + size;
+        bufsize = 6 + size;
     }
 
     uint8_t *cmd = malloc(bufsize);
@@ -144,8 +151,10 @@ static int twi_serial_write_memory(struct twi_privdata *twi, uint8_t *buffer, ui
     if (memtype == MEMTYPE_FLASH) {
         memset(cmd +4 +size, 0xFF, twi->pagesize - size);
     }
+    cmd[bufsize -1] = END_OF_MESSAGE;
+    cmd[bufsize -2] = END_OF_MESSAGE;
 
-    int result = sp_nonblocking_write(twi->port, cmd, bufsize);
+    int result = sp_blocking_write(twi->port, cmd, bufsize, 1000);
     free(cmd);
 
     return (result != bufsize);
@@ -169,8 +178,6 @@ static int twi_serial_open_device(struct twi_privdata *twi)
         fprintf(stderr, "failed to open '%s': %s\n", twi->device, strerror(errno));
         return -1;
     }
-
-    twi->connected = 1;
     return 0;
 }
 
@@ -239,6 +246,8 @@ static int twi_serial_open(struct multiboot *mboot)
     printf("flash size     : 0x%04x / %5d   (0x%02x bytes/page)\n", twi->flashsize, twi->flashsize, twi->pagesize);
     printf("eeprom size    : 0x%04x / %5d\n", twi->eepromsize, twi->eepromsize);
 
+    twi->connected = 1;
+
     return 0;
 }
 
@@ -247,9 +256,12 @@ static int twi_serial_read(struct multiboot *mboot, struct databuf *dbuf, int me
     struct twi_privdata *twi = (struct twi_privdata *)mboot->privdata;
     char *progress_msg = (memtype == MEMTYPE_FLASH) ? "reading flash" : "reading eeprom";
 
+    usleep(10000);
+
     int pos = 0;
     int size = (memtype == MEMTYPE_FLASH) ? twi->flashsize : twi->eepromsize;
     while (pos < size) {
+        usleep(5000);
         mboot->progress_cb(progress_msg, pos, size);
 
         int len = MIN(READ_BLOCK_SIZE, size - pos);
@@ -272,10 +284,12 @@ static int twi_serial_write(struct multiboot *mboot, struct databuf *dbuf, int m
     struct twi_privdata *twi = (struct twi_privdata *)mboot->privdata;
     char *progress_msg = (memtype == MEMTYPE_FLASH) ? "writing flash" : "writing eeprom";
 
+    usleep(10000);
+
     int pos = 0;
     while (pos < dbuf->length) {
+        usleep(5000);
         mboot->progress_cb(progress_msg, pos, dbuf->length);
-
         int len = (memtype == MEMTYPE_FLASH) ? twi->pagesize : WRITE_BLOCK_SIZE;
 
         len = MIN(len, dbuf->length - pos);
@@ -296,9 +310,12 @@ static int twi_serial_verify(struct multiboot *mboot, struct databuf *dbuf, int 
     struct twi_privdata *twi = (struct twi_privdata *)mboot->privdata;
     char *progress_msg = (memtype == MEMTYPE_FLASH) ? "verifing flash" : "verifing eeprom";
 
+    usleep(10000);
+
     int pos = 0;
     uint8_t comp[READ_BLOCK_SIZE];
     while (pos < dbuf->length) {
+        usleep(5000);
         mboot->progress_cb(progress_msg, pos, dbuf->length);
 
         int len = MIN(READ_BLOCK_SIZE, dbuf->length - pos);
